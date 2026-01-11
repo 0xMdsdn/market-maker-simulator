@@ -1,0 +1,8 @@
+{
+    "name": "market-maker-simulator",
+    "version": "1.0.0",
+    "description": "Market Making Simulator with Real-Time Prices",
+    "dependencies": {
+      "@vercel/kv": "^1.0.1"
+    }
+  }
