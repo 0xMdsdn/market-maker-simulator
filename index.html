@@ -5,400 +5,273 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Market Making Simulator</title>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta name="description"
+        content="Volatility-adaptive, inventory-aware market making strategy simulator with live and simulation modes">
+
+    <!-- Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-    <div id="root"></div>
-    <script type="text/babel">
-        const { useState, useEffect, useRef, useCallback } = React;
-        // const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <h1 class="logo">📊 Market Making Simulator</h1>
+            <div class="mode-toggle">
+                <button id="btn-simulation" class="mode-btn active">Simulation</button>
+                <button id="btn-live" class="mode-btn">Live</button>
+            </div>
+        </header>
 
-        const AlertTriangle = ({ size = 24, className = "" }) => (
-            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
-                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"></path>
-                <line x1="12" y1="9" x2="12" y2="13"></line>
-                <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-        );
+        <!-- Control Panel -->
+        <section class="control-panel">
+            <div class="control-group">
+                <label>Asset</label>
+                <select id="asset-selector">
+                    <option value="BTC">BTC</option>
+                    <option value="ETH">ETH</option>
+                    <option value="SOL">SOL</option>
+                    <option value="APT">APT</option>
+                </select>
+            </div>
 
-        const Download = ({ size = 20 }) => (
-            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-            </svg>
-        );
+            <div class="control-group">
+                <label>Balance ($)</label>
+                <input type="number" id="initial-balance" value="1000" min="100" step="100">
+            </div>
 
-        const Save = ({ size = 20 }) => (
-            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
-                <polyline points="17 21 17 13 7 13 7 21" />
-                <polyline points="7 3 7 8 15 8" />
-            </svg>
-        );
+            <div class="control-group">
+                <label>k_vol</label>
+                <input type="number" id="param-kvol" value="0.2" min="0.1" max="1" step="0.05">
+            </div>
 
-        const MarketMaker = () => {
-            const [asset, setAsset] = useState('BTC');
-            const [isRunning, setIsRunning] = useState(false);
-            const [mid, setMid] = useState(0);
-            const [livePrice, setLivePrice] = useState(null);
-            const [initialBalance, setInitialBalance] = useState(1000);
-            const [balance, setBalance] = useState(1000);
-            const [longPos, setLongPos] = useState({ size: 0, avgPrice: 0 });
-            const [shortPos, setShortPos] = useState({ size: 0, avgPrice: 0 });
-            const [realizedPnl, setRealizedPnl] = useState(0);
-            const [trades, setTrades] = useState([]);
-            const [collapses, setCollapses] = useState([]);
-            const [quotes, setQuotes] = useState({ bid: 0, ask: 0, bidSize: 0, askSize: 0 });
-            const [priceHistory, setPriceHistory] = useState([]);
-            const [fullHistory, setFullHistory] = useState([]);
-            const [metrics, setMetrics] = useState({ atr: 0, baseSpread: 0, skew: 0, imbalance: 0, spread: 0, vol: 0 });
-            const [savedSimulations, setSavedSimulations] = useState([]);
-            const [simulationId, setSimulationId] = useState(null);
+            <div class="control-group">
+                <label>k_pos</label>
+                <input type="number" id="param-kpos" value="0.3" min="0.1" max="1" step="0.05">
+            </div>
 
-            const priceDataRef = useRef([]);
-            const tradeCountRef = useRef(0);
-            const collapseCountRef = useRef(0);
+            <div class="control-group">
+                <label>Tick Size</label>
+                <input type="number" id="param-ticksize" value="1" min="0.001" step="0.001">
+            </div>
 
-            const LEVERAGE = 10;
-            const ORDER_SIZE_USD = 50;
-            const COLLAPSE_THRESHOLD = 100;
+            <div class="control-group">
+                <label>Max Position</label>
+                <input type="number" id="param-maxpos" value="0.5" min="0.01" step="0.1">
+            </div>
 
-            const defaultConfigs = {
-                BTC: { kVol: 0.2, kPos: 0.3, tickSize: 1, posMax: 0.5, initPrice: 95000, coinId: 'bitcoin' },
-                ETH: { kVol: 0.25, kPos: 0.35, tickSize: 0.01, posMax: 5, initPrice: 3300, coinId: 'ethereum' },
-                SOL: { kVol: 0.3, kPos: 0.5, tickSize: 0.001, posMax: 50, initPrice: 190, coinId: 'solana' },
-                APT: { kVol: 0.5, kPos: 0.7, tickSize: 0.001, posMax: 100, initPrice: 9.5, coinId: 'aptos' }
-            };
+            <div class="control-group simulation-only">
+                <label>Volatility</label>
+                <select id="volatility-regime">
+                    <option value="low">Low</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
 
-            const [assetConfig] = useState(defaultConfigs);
-            const config = assetConfig[asset];
+            <div class="control-group simulation-only">
+                <label>Drift</label>
+                <input type="number" id="param-drift" value="0" step="0.0001">
+            </div>
 
-            const fetchPrice = useCallback(async () => {
-                try {
-                    const coinId = config.coinId;
-                    const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`);
-                    const data = await response.json();
+            <div class="control-group simulation-only">
+                <label>ATR Length</label>
+                <input type="number" id="param-atr-length" value="20" min="5" max="50" step="1">
+            </div>
 
-                    if (data && data[coinId] && data[coinId].usd) {
-                        const price = data[coinId].usd;
-                        setLivePrice(price);
-                        setMid(price);
+            <div class="control-group simulation-only">
+                <label>RNG Seed</label>
+                <input type="number" id="param-seed" value="12345" min="1" step="1">
+            </div>
 
-                        const candle = { close: price, high: price * 1.0002, low: price * 0.9998, timestamp: Date.now() };
-                        priceDataRef.current.push(candle);
-                        if (priceDataRef.current.length > 30) priceDataRef.current.shift();
-                        return price;
-                    }
-                } catch (error) {
-                    console.error('Error fetching price from CoinGecko:', error);
-                    // When API fails, maintain the last known price if we have one
-                    // Don't use the hardcoded initPrice - just wait for the next successful fetch
-                    if (livePrice !== null) {
-                        console.log('API failed, maintaining last known price:', livePrice);
-                        return livePrice;
-                    }
-                    console.log('API failed on initial load, will retry...');
-                }
-            }, [config.coinId, livePrice]);
+            <div class="control-buttons">
+                <button id="btn-start" class="btn btn-start">▶ Start</button>
+                <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
+                <button id="btn-reset" class="btn btn-reset">↺ Reset</button>
+            </div>
 
-            useEffect(() => { fetchPrice(); }, [fetchPrice]);
+            <div class="export-buttons">
+                <button id="btn-csv" class="btn btn-export">📥 CSV</button>
+                <button id="btn-json" class="btn btn-export">📥 JSON</button>
+            </div>
+        </section>
 
-            const saveSimulation = async () => {
-                try {
-                    const simulationData = {
-                        id: simulationId || `sim-${Date.now()}`,
-                        asset, timestamp: new Date().toISOString(), balance, initialBalance,
-                        longPos, shortPos, realizedPnl, trades, collapses, fullHistory, metrics
-                    };
-                    const response = await fetch('/api/save-data', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(simulationData)
-                    });
-                    if (response.ok) {
-                        const result = await response.json();
-                        setSimulationId(result.id);
-                        alert('Simulation saved successfully!');
-                        loadSavedSimulations();
-                    }
-                } catch (error) {
-                    console.error('Error saving:', error);
-                    alert('Failed to save simulation');
-                }
-            };
+        <!-- Metrics Dashboard -->
+        <section class="dashboard">
+            <!-- Account Metrics -->
+            <div class="metrics-card account-metrics">
+                <h3>Account</h3>
+                <div class="metric">
+                    <span class="metric-label">Balance</span>
+                    <span id="metric-balance" class="metric-value">$1,000.00</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Equity</span>
+                    <span id="metric-equity" class="metric-value">$1,000.00</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Unrealized PnL</span>
+                    <span id="metric-unrealized-pnl" class="metric-value neutral">$0.00</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Realized PnL</span>
+                    <span id="metric-realized-pnl" class="metric-value neutral">$0.00</span>
+                </div>
+            </div>
 
-            const loadSavedSimulations = async () => {
-                try {
-                    const response = await fetch('/api/get-data?list=true');
-                    if (response.ok) {
-                        const data = await response.json();
-                        setSavedSimulations(data.simulations || []);
-                    }
-                } catch (error) {
-                    console.error('Error loading simulations:', error);
-                }
-            };
-
-            const loadSimulation = async (id) => {
-                try {
-                    const response = await fetch(`/api/get-data?id=${id}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setAsset(data.asset); setBalance(data.balance); setInitialBalance(data.initialBalance);
-                        setLongPos(data.longPos); setShortPos(data.shortPos); setRealizedPnl(data.realizedPnl);
-                        setTrades(data.trades); setCollapses(data.collapses); setFullHistory(data.fullHistory);
-                        setPriceHistory(data.fullHistory.slice(-50)); setMetrics(data.metrics); setSimulationId(id);
-                        alert('Simulation loaded!');
-                    }
-                } catch (error) {
-                    console.error('Error loading simulation:', error);
-                }
-            };
-
-            const downloadCSV = () => {
-                const now = new Date();
-                const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-                const last5Minutes = fullHistory.filter(entry => new Date(entry.timestamp) >= fiveMinutesAgo);
-                if (last5Minutes.length === 0) { alert('No data available'); return; }
-                const headers = Object.keys(last5Minutes[0]).join(',');
-                const rows = last5Minutes.map(entry =>
-                    Object.values(entry).map(val => typeof val === 'number' ? val.toFixed(6) : val).join(',')
-                );
-                const csv = [headers, ...rows].join('\n');
-                const blob = new Blob([csv], { type: 'text/csv' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `simulation_${asset}_${now.toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
-                document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            };
-
-            useEffect(() => { loadSavedSimulations(); }, []);
-
-            const calculateATR = (prices, length = 20) => {
-                if (prices.length < 2) return 0;
-                const trueRanges = [];
-                for (let i = 1; i < Math.min(prices.length, length + 1); i++) {
-                    const high = Math.max(prices[i].high, prices[i - 1].close);
-                    const low = Math.min(prices[i].low, prices[i - 1].close);
-                    trueRanges.push(high - low);
-                }
-                return trueRanges.reduce((a, b) => a + b, 0) / trueRanges.length;
-            };
-
-            const roundPrice = (price) => {
-                if (asset === 'BTC') return Math.round(price);
-                return Math.round(price / config.tickSize) * config.tickSize;
-            };
-
-            const calculateQuotes = (currentMid) => {
-                const atr = calculateATR(priceDataRef.current, 20);
-                const minSpread = config.tickSize * 2;
-                const baseSpread = Math.max(minSpread, config.kVol * atr);
-                const netPosition = longPos.size - shortPos.size;
-                const imbalance = netPosition / config.posMax;
-                const skew = config.kPos * imbalance * baseSpread;
-                const bidPrice = roundPrice(currentMid - baseSpread / 2 - skew);
-                const askPrice = roundPrice(currentMid + baseSpread / 2 - skew);
-                const spread = askPrice - bidPrice;
-                const buyingPower = balance * LEVERAGE;
-                const maxOrderValue = Math.min(ORDER_SIZE_USD, buyingPower);
-                const bidSize = maxOrderValue / bidPrice;
-                const askSize = maxOrderValue / askPrice;
-
-                setMetrics({
-                    atr: atr.toFixed(4), baseSpread: baseSpread.toFixed(4),
-                    skew: skew.toFixed(4), imbalance: imbalance.toFixed(4),
-                    spread: spread.toFixed(asset === 'BTC' ? 0 : 2), vol: atr.toFixed(4)
-                });
-                setQuotes({ bid: bidPrice, ask: askPrice, bidSize, askSize });
-                return { bid: bidPrice, ask: askPrice, bidSize, askSize };
-            };
-
-            const executeCollapse = () => {
-                const collapseSize = Math.min(longPos.size, shortPos.size);
-                if (collapseSize === 0) return;
-                const collapsePnl = (shortPos.avgPrice - longPos.avgPrice) * collapseSize;
-                const longMarginReturn = (longPos.avgPrice * collapseSize) / LEVERAGE;
-                const shortMarginReturn = (shortPos.avgPrice * collapseSize) / LEVERAGE;
-                setLongPos(prev => ({ size: prev.size - collapseSize, avgPrice: prev.size - collapseSize > 0 ? prev.avgPrice : 0 }));
-                setShortPos(prev => ({ size: prev.size - collapseSize, avgPrice: prev.size - collapseSize > 0 ? prev.avgPrice : 0 }));
-                setBalance(prev => prev + longMarginReturn + shortMarginReturn + collapsePnl);
-                setRealizedPnl(prev => prev + collapsePnl);
-                collapseCountRef.current++;
-                setCollapses(c => [{ id: collapseCountRef.current, size: collapseSize.toFixed(6), pnl: collapsePnl.toFixed(2), timestamp: new Date().toLocaleTimeString() }, ...c].slice(0, 10));
-            };
-
-            const simulateMarketActivity = (currentMid, currentQuotes) => {
-                if (Math.random() < 0.25) {
-                    const isBuy = Math.random() < 0.5;
-                    const fillPercentage = 0.5 + Math.random() * 0.5;
-                    if (isBuy) {
-                        const fillSize = currentQuotes.askSize * fillPercentage;
-                        const marginRequired = (currentQuotes.ask * fillSize) / LEVERAGE;
-                        if (balance >= marginRequired) {
-                            setBalance(prev => prev - marginRequired);
-                            setShortPos(prev => ({
-                                size: prev.size + fillSize,
-                                avgPrice: prev.size > 0 ? (prev.avgPrice * prev.size + currentQuotes.ask * fillSize) / (prev.size + fillSize) : currentQuotes.ask
-                            }));
-                            tradeCountRef.current++;
-                            setTrades(t => [{ id: tradeCountRef.current, side: 'SHORT', price: currentQuotes.ask, size: fillSize.toFixed(6), fillPercent: (fillPercentage * 100).toFixed(0), timestamp: new Date().toLocaleTimeString() }, ...t].slice(0, 15));
-                        }
-                    } else {
-                        const fillSize = currentQuotes.bidSize * fillPercentage;
-                        const marginRequired = (currentQuotes.bid * fillSize) / LEVERAGE;
-                        if (balance >= marginRequired) {
-                            setBalance(prev => prev - marginRequired);
-                            setLongPos(prev => ({
-                                size: prev.size + fillSize,
-                                avgPrice: prev.size > 0 ? (prev.avgPrice * prev.size + currentQuotes.bid * fillSize) / (prev.size + fillSize) : currentQuotes.bid
-                            }));
-                            tradeCountRef.current++;
-                            setTrades(t => [{ id: tradeCountRef.current, side: 'LONG', price: currentQuotes.bid, size: fillSize.toFixed(6), fillPercent: (fillPercentage * 100).toFixed(0), timestamp: new Date().toLocaleTimeString() }, ...t].slice(0, 15));
-                        }
-                    }
-                }
-            };
-
-            useEffect(() => {
-                if (isRunning) {
-                    const interval = setInterval(async () => {
-                        await fetchPrice();
-                        const currentMid = mid;
-                        if (balance < COLLAPSE_THRESHOLD && longPos.size > 0 && shortPos.size > 0) {
-                            executeCollapse();
-                        } else {
-                            const newQuotes = calculateQuotes(currentMid);
-                            simulateMarketActivity(currentMid, newQuotes);
-                        }
-                        const longUnrealized = longPos.size > 0 ? longPos.size * (currentMid - longPos.avgPrice) : 0;
-                        const shortUnrealized = shortPos.size > 0 ? shortPos.size * (shortPos.avgPrice - currentMid) : 0;
-                        const totalUnrealizedPnl = longUnrealized + shortUnrealized;
-                        const longMargin = longPos.size > 0 ? (longPos.avgPrice * longPos.size) / LEVERAGE : 0;
-                        const shortMargin = shortPos.size > 0 ? (shortPos.avgPrice * shortPos.size) / LEVERAGE : 0;
-                        const equity = balance + longMargin + shortMargin + totalUnrealizedPnl;
-                        const timestamp = new Date();
-                        const dataPoint = { timestamp: timestamp.toISOString(), time: timestamp.toLocaleTimeString(), mid: currentMid, balance: balance, equity: equity, totalUnrealizedPnl: totalUnrealizedPnl };
-                        setFullHistory(h => [...h, dataPoint]);
-                        setPriceHistory(h => [...h, dataPoint].slice(-50));
-                    }, 3000);
-                    return () => clearInterval(interval);
-                }
-            }, [isRunning, mid, longPos, shortPos, balance, fetchPrice]);
-
-            const handleReset = () => {
-                setIsRunning(false); setMid(config.initPrice); setLivePrice(config.initPrice);
-                setBalance(initialBalance); setLongPos({ size: 0, avgPrice: 0 }); setShortPos({ size: 0, avgPrice: 0 });
-                setRealizedPnl(0); setTrades([]); setCollapses([]); setPriceHistory([]); setFullHistory([]);
-                tradeCountRef.current = 0; collapseCountRef.current = 0; setSimulationId(null); fetchPrice();
-            };
-
-            const longUnrealized = longPos.size > 0 ? longPos.size * (mid - longPos.avgPrice) : 0;
-            const shortUnrealized = shortPos.size > 0 ? shortPos.size * (shortPos.avgPrice - mid) : 0;
-            const totalUnrealizedPnl = longUnrealized + shortUnrealized;
-            const longMargin = longPos.size > 0 ? (longPos.avgPrice * longPos.size) / LEVERAGE : 0;
-            const shortMargin = shortPos.size > 0 ? (shortPos.avgPrice * shortPos.size) / LEVERAGE : 0;
-            const equity = balance + longMargin + shortMargin + totalUnrealizedPnl;
-
-            return (
-                <div className="p-6 max-w-7xl mx-auto bg-gray-50 min-h-screen">
-                    <h1 className="text-3xl font-bold mb-6 text-gray-800">Market Making Simulator (10x Leverage)</h1>
-                    {balance < COLLAPSE_THRESHOLD * 1.2 && balance > 0 && (
-                        <div className="bg-yellow-100 border-l-4 border-yellow-500 p-4 mb-6 flex items-center">
-                            <AlertTriangle size={24} className="text-yellow-700 mr-2" />
-                            <p className="font-bold text-yellow-700">Warning: Balance near collapse threshold!</p>
-                        </div>
-                    )}
-                    <div className="bg-white rounded-lg shadow p-4 mb-6">
-                        <div className="flex gap-4 mb-4 flex-wrap">
-                            <select value={asset} onChange={(e) => { handleReset(); setAsset(e.target.value); }} disabled={isRunning} className="px-4 py-2 border rounded">
-                                <option value="BTC">BTC</option>
-                                <option value="ETH">ETH</option>
-                                <option value="SOL">SOL</option>
-                                <option value="APT">APT</option>
-                            </select>
-                            <select onChange={(e) => e.target.value && loadSimulation(e.target.value)} className="px-4 py-2 border rounded" disabled={isRunning}>
-                                <option value="">Load Saved...</option>
-                                {savedSimulations.map(sim => (
-                                    <option key={sim.id} value={sim.id}>{sim.asset} - {new Date(sim.timestamp).toLocaleString()}</option>
-                                ))}
-                            </select>
-                            <div className="flex items-center gap-2">
-                                <label className="text-sm font-medium">Balance:</label>
-                                <input type="number" value={initialBalance} onChange={(e) => { const newBal = parseFloat(e.target.value) || 1000; setInitialBalance(newBal); setBalance(newBal); }} disabled={isRunning} className="px-3 py-2 border rounded w-32" step="100" />
-                            </div>
-                            <button onClick={() => setIsRunning(!isRunning)} disabled={!livePrice} className={`px-6 py-2 rounded font-semibold text-white ${isRunning ? 'bg-red-500' : livePrice ? 'bg-green-500' : 'bg-gray-400'}`}>
-                                {isRunning ? 'Stop' : livePrice ? 'Start' : 'Loading...'}
-                            </button>
-                            <button onClick={handleReset} className="px-6 py-2 bg-gray-500 text-white rounded font-semibold">Reset</button>
-                            <button onClick={saveSimulation} className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded font-semibold"><Save size={20} />Save</button>
-                            <button onClick={downloadCSV} disabled={fullHistory.length === 0} className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded font-semibold disabled:bg-gray-300"><Download size={20} />CSV</button>
-                        </div>
+            <!-- Market Metrics -->
+            <div class="metrics-card market-metrics">
+                <h3>Market</h3>
+                <div class="metric">
+                    <span class="metric-label">Mid Price</span>
+                    <span id="metric-mid" class="metric-value">$0.00</span>
+                </div>
+                <div class="quote-display">
+                    <div class="bid-display">
+                        <span class="quote-label">BID</span>
+                        <span id="metric-bid" class="quote-value bid">$0.00</span>
+                        <span id="metric-bid-size" class="quote-size">0.000000</span>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                        <div className="bg-white rounded-lg shadow p-4"><div className="text-sm text-gray-600">Balance</div><div className="text-xl font-bold">${balance.toFixed(2)}</div></div>
-                        <div className="bg-white rounded-lg shadow p-4"><div className="text-sm text-gray-600">Equity</div><div className={`text-xl font-bold ${equity >= initialBalance ? 'text-green-600' : 'text-red-600'}`}>${equity.toFixed(2)}</div></div>
-                        <div className="bg-white rounded-lg shadow p-4"><div className="text-sm text-gray-600">Live Price</div><div className="text-xl font-bold text-blue-600">${livePrice ? livePrice.toFixed(asset === 'BTC' ? 0 : 2) : '...'}</div></div>
-                        <div className="bg-white rounded-lg shadow p-4"><div className="text-sm text-gray-600">Realized PnL</div><div className={`text-xl font-bold ${realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>${realizedPnl.toFixed(2)}</div></div>
-                        <div className="bg-white rounded-lg shadow p-4"><div className="text-sm text-gray-600">Collapses</div><div className="text-xl font-bold text-purple-600">{collapseCountRef.current}</div></div>
+                    <div class="spread-display">
+                        <span class="spread-label">Spread</span>
+                        <span id="metric-spread" class="spread-value">$0.00</span>
                     </div>
-                    <div className="bg-white rounded-lg shadow p-4 mb-6">
-                        <h2 className="text-xl font-bold mb-4">Quotes</h2>
-                        <div className="grid grid-cols-2 gap-6">
-                            <div><div className="text-sm text-gray-600 mb-1">BID</div><div className="text-2xl font-bold text-green-600">${quotes.bid.toFixed(asset === 'BTC' ? 0 : 2)}</div><div className="text-sm text-gray-500">Size: {quotes.bidSize.toFixed(6)}</div></div>
-                            <div><div className="text-sm text-gray-600 mb-1">ASK</div><div className="text-2xl font-bold text-red-600">${quotes.ask.toFixed(asset === 'BTC' ? 0 : 2)}</div><div className="text-sm text-gray-500">Size: {quotes.askSize.toFixed(6)}</div></div>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t text-sm mt-4">
-                            <div><span className="font-semibold">Spread:</span> ${metrics.spread}</div>
-                            <div><span className="font-semibold">Vol:</span> {metrics.vol}</div>
-                            <div><span className="font-semibold">Base Spread:</span> {metrics.baseSpread}</div>
-                            <div><span className="font-semibold">Skew:</span> {metrics.skew}</div>
-                        </div>
+                    <div class="ask-display">
+                        <span class="quote-label">ASK</span>
+                        <span id="metric-ask" class="quote-value ask">$0.00</span>
+                        <span id="metric-ask-size" class="quote-size">0.000000</span>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-white rounded-lg shadow p-4">
-                            <h2 className="text-lg font-bold mb-3">Trades</h2>
-                            <div className="space-y-2 max-h-96 overflow-y-auto">
-                                {trades.map(t => (
-                                    <div key={t.id} className="text-sm border-b pb-2">
-                                        <div className="flex justify-between">
-                                            <span className={t.side === 'LONG' ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{t.side}</span>
-                                            <span className="text-gray-500">{t.timestamp}</span>
-                                        </div>
-                                        <div className="text-xs text-gray-600">{t.size} @ ${parseFloat(t.price).toFixed(0)} ({t.fillPercent}%)</div>
-                                    </div>
-                                ))}
-                                {trades.length === 0 && <div className="text-gray-500 text-center py-4">No trades</div>}
-                            </div>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">ATR Volatility</span>
+                    <span id="metric-atr" class="metric-value">0.0000</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Base Spread</span>
+                    <span id="metric-base-spread" class="metric-value">0.0000</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Skew</span>
+                    <span id="metric-skew" class="metric-value">0.0000</span>
+                </div>
+            </div>
+
+            <!-- Positions -->
+            <div class="metrics-card positions-metrics">
+                <h3>Positions</h3>
+                <div class="position long-position">
+                    <div class="position-header">
+                        <span class="position-label">LONG</span>
+                        <span id="long-margin" class="position-margin">$0.00</span>
+                    </div>
+                    <div class="position-details">
+                        <div class="position-field">
+                            <span>Size</span>
+                            <span id="long-size">0.000000</span>
                         </div>
-                        <div className="bg-white rounded-lg shadow p-4">
-                            <h2 className="text-lg font-bold mb-3">Collapses</h2>
-                            <div className="space-y-2 max-h-96 overflow-y-auto">
-                                {collapses.map(c => (
-                                    <div key={c.id} className="text-sm border-b pb-2">
-                                        <div className="flex justify-between">
-                                            <span className="font-bold text-purple-600">COLLAPSE</span>
-                                            <span className="text-gray-500">{c.timestamp}</span>
-                                        </div>
-                                        <div className="text-xs text-gray-600">Size: {c.size}</div>
-                                        <div className={`text-sm font-bold ${parseFloat(c.pnl) >= 0 ? 'text-green-600' : 'text-red-600'}`}>PnL: ${c.pnl}</div>
-                                    </div>
-                                ))}
-                                {collapses.length === 0 && <div className="text-gray-500 text-center py-4">No collapses</div>}
-                            </div>
+                        <div class="position-field">
+                            <span>Avg Price</span>
+                            <span id="long-avg-price">$0.00</span>
                         </div>
                     </div>
                 </div>
-            );
-        };
+                <div class="position short-position">
+                    <div class="position-header">
+                        <span class="position-label">SHORT</span>
+                        <span id="short-margin" class="position-margin">$0.00</span>
+                    </div>
+                    <div class="position-details">
+                        <div class="position-field">
+                            <span>Size</span>
+                            <span id="short-size">0.000000</span>
+                        </div>
+                        <div class="position-field">
+                            <span>Avg Price</span>
+                            <span id="short-avg-price">$0.00</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="imbalance-indicator">
+                    <span class="metric-label">Imbalance</span>
+                    <span id="metric-imbalance" class="metric-value">0.00%</span>
+                </div>
+            </div>
+        </section>
 
-        ReactDOM.render(<MarketMaker />, document.getElementById('root'));
-    </script>
+        <!-- Charts Section -->
+        <section class="charts-section">
+            <div class="chart-container">
+                <h3>Price Chart</h3>
+                <div id="price-chart" class="chart"></div>
+            </div>
+            <div class="chart-container">
+                <h3>Equity Curve</h3>
+                <div id="equity-chart" class="chart"></div>
+            </div>
+            <div class="chart-container">
+                <h3>PnL</h3>
+                <div id="pnl-chart" class="chart"></div>
+            </div>
+        </section>
+
+        <!-- Data Tables -->
+        <section class="tables-section">
+            <div class="table-container">
+                <h3>Trades <span id="trade-count" class="count-badge">0</span></h3>
+                <div class="table-scroll">
+                    <table id="trades-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Side</th>
+                                <th>Price</th>
+                                <th>Size</th>
+                                <th>Margin</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-tbody">
+                            <tr class="empty-row">
+                                <td colspan="5">No trades yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="table-container">
+                <h3>Collapses <span id="collapse-count" class="count-badge">0</span></h3>
+                <div class="table-scroll">
+                    <table id="collapses-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Size</th>
+                                <th>PnL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="collapses-tbody">
+                            <tr class="empty-row">
+                                <td colspan="3">No collapses yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Status Bar -->
+        <footer class="status-bar">
+            <span id="status-mode" class="status-item">Mode: Simulation</span>
+            <span id="status-asset" class="status-item">Asset: BTC</span>
+            <span id="status-running" class="status-item">Status: Stopped</span>
+            <span id="status-tick" class="status-item">Tick: 0</span>
+        </footer>
+    </div>
+
+    <!-- App Script -->
+    <script src="app.js"></script>
 </body>
 
 </html>
